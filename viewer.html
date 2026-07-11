@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Chat History</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11100e;
+      --panel: #1b1a17;
+      --panel-2: #22201d;
+      --line: #34312b;
+      --text: #f0eee8;
+      --muted: #a8a198;
+      --green: #6fd6a5;
+      --gold: #e0b84d;
+      --red: #e8786f;
+      --blue: #72a7ff;
+      --violet: #b895ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, textarea, select {
+      font: inherit;
+      color: var(--text);
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    button {
+      min-height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--green); }
+    button.primary { background: #244d3b; border-color: #3d8f68; }
+    button.danger { background: #4d2724; border-color: #9c504a; }
+    input, textarea, select { width: 100%; padding: 9px 10px; }
+    textarea { min-height: 150px; resize: vertical; }
+    header {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #171614;
+    }
+    .brand {
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+    .search { max-width: 520px; margin-left: auto; }
+    .shell {
+      height: calc(100vh - 58px);
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+    }
+    aside {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+    }
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .tabs button.active { background: #3a3020; border-color: var(--gold); }
+    .sidebar-body { overflow: auto; padding: 10px; }
+    .row {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 10px;
+      margin-bottom: 8px;
+      background: #201f1c;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .row.active { border-color: var(--green); background: #1f2b24; }
+    .row-title { font-weight: 700; overflow-wrap: anywhere; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: #131210;
+    }
+    .toolbar {
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    .toolbar .title {
+      font-weight: 800;
+      margin-right: auto;
+      max-width: 520px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .messages {
+      overflow: auto;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .bubble {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #1d1c19;
+      max-width: 980px;
+      padding: 12px 14px;
+    }
+    .bubble.assistant { border-left: 4px solid var(--green); }
+    .bubble.user { border-left: 4px solid var(--blue); margin-left: auto; }
+    .bubble.system { border-left: 4px solid var(--gold); }
+    .bubble-head {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .bubble-head button {
+      min-height: 26px;
+      padding: 0 8px;
+      margin-left: auto;
+      font-size: 12px;
+    }
+    pre {
+      overflow: auto;
+      padding: 12px;
+      background: #0c0c0b;
+      border: 1px solid #2a2824;
+      border-radius: 6px;
+    }
+    code { color: #d6f5d8; }
+    .empty {
+      margin: auto;
+      color: var(--muted);
+      text-align: center;
+      max-width: 380px;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      margin-right: 5px;
+    }
+    .type-decision { color: var(--green); }
+    .type-fact { color: var(--blue); }
+    .type-convention { color: var(--gold); }
+    .type-solved_problem { color: var(--violet); }
+    .type-gotcha { color: var(--red); }
+    .type-todo { color: #f2d27d; }
+    dialog {
+      width: min(760px, calc(100vw - 28px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0;
+      background: var(--panel);
+      color: var(--text);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+    .modal-head, .modal-foot {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-foot { border-top: 1px solid var(--line); border-bottom: 0; justify-content: flex-end; }
+    .modal-title { font-weight: 800; margin-right: auto; }
+    .modal-body { padding: 12px; max-height: 70vh; overflow: auto; }
+    .form-grid { display: grid; gap: 10px; }
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      background: #26382f;
+      border: 1px solid #4b9d74;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: none;
+      max-width: 380px;
+    }
+    @media (max-width: 860px) {
+      header { height: auto; flex-wrap: wrap; }
+      .search { order: 3; max-width: none; flex-basis: 100%; }
+      .shell { height: auto; min-height: calc(100vh - 100px); grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
+      .split { grid-template-columns: 1fr; }
+      .toolbar .title { max-width: 100%; white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">Claude Chat History</div>
+    <input id="globalSearch" class="search" placeholder="Search messages (Ctrl+K)">
+    <button id="syncBtn">Sync</button>
+    <button id="importBtn">Import</button>
+    <button id="newBtn" class="primary">New</button>
+  </header>
+  <div class="shell">
+    <aside>
+      <div class="tabs">
+        <button data-tab="chats" class="active">Chats</button>
+        <button data-tab="saved">Saved</button>
+        <button data-tab="repos">Repos</button>
+        <button data-tab="memory">Memory</button>
+      </div>
+      <div id="side" class="sidebar-body"></div>
+    </aside>
+    <main>
+      <div id="toolbar" class="toolbar"></div>
+      <div id="content" class="messages"></div>
+    </main>
+  </div>
+  <dialog id="modal"></dialog>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const state = {
+      tab: "chats",
+      sessions: [],
+      selectedSession: null,
+      messages: [],
+      bookmarks: [],
+      repos: [],
+      selectedRepo: null,
+      repoFiles: [],
+      projects: [],
+      selectedProject: null,
+      artifacts: [],
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[ch]));
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { "content-type": "application/json", ...(options.headers || {}) },
+        ...options,
+        body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body,
+      });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!res.ok) throw new Error((data && data.error) || res.statusText);
+      return data;
+    }
+
+    function toast(message) {
+      const node = $("toast");
+      node.textContent = message;
+      node.style.display = "block";
+      clearTimeout(node.timer);
+      node.timer = setTimeout(() => node.style.display = "none", 2600);
+    }
+
+    function openModal(title, body, onSubmit, submitText = "Save") {
+      const dialog = $("modal");
+      dialog.innerHTML = `
+        <form method="dialog">
+          <div class="modal-head"><div class="modal-title">${esc(title)}</div><button value="cancel">x</button></div>
+          <div class="modal-body">${body}</div>
+          <div class="modal-foot">
+            <button value="cancel">Cancel</button>
+            ${onSubmit ? `<button id="modalSubmit" class="primary" value="default">${esc(submitText)}</button>` : ""}
+          </div>
+        </form>`;
+      dialog.showModal();
+      if (onSubmit) {
+        $("modalSubmit").addEventListener("click", async (event) => {
+          event.preventDefault();
+          try {
+            const result = await onSubmit(dialog);
+            if (result !== false) dialog.close();
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      }
+    }
+
+    function markdown(text) {
+      if (window.marked) return marked.parse(String(text || ""));
+      return `<pre>${esc(text)}</pre>`;
+    }
+
+    async function loadSessions() {
+      state.sessions = await api("/api/sessions");
+      renderSide();
+    }
+
+    async function selectSession(id) {
+      state.selectedSession = state.sessions.find((s) => s.id === id) || null;
+      state.messages = await api(`/api/sessions/${id}/messages`);
+      renderSide();
+      renderMain();
+    }
+
+    function renderSide() {
+      const side = $("side");
+      if (state.tab === "chats") {
+        side.innerHTML = state.sessions.map((s) => `
+          <button class="row ${state.selectedSession && state.selectedSession.id === s.id ? "active" : ""}" data-session="${s.id}">
+            <div class="row-title">${esc(s.name || "Untitled")}</div>
+            <div class="meta">${s.message_count || 0} messages ${s.tags ? " - " + esc(s.tags) : ""}</div>
+          </button>`).join("") || `<div class="empty">No sessions yet.</div>`;
+        side.querySelectorAll("[data-session]").forEach((node) => {
+          node.onclick = () => selectSession(Number(node.dataset.session));
+        });
+      }
+      if (state.tab === "saved") renderBookmarks();
+      if (state.tab === "repos") renderRepos();
+      if (state.tab === "memory") renderMemorySide();
+    }
+
+    function renderMain() {
+      const toolbar = $("toolbar");
+      const content = $("content");
+      if (!state.selectedSession) {
+        toolbar.innerHTML = `<div class="title">No session selected</div>`;
+        content.innerHTML = `<div class="empty">Choose a chat or import a conversation.</div>`;
+        return;
+      }
+      toolbar.innerHTML = `
+        <div class="title">${esc(state.selectedSession.name || "Untitled")}</div>
+        <button id="summaryBtn">Summary</button>
+        <button id="addMsgBtn">Add Message</button>
+        <button id="renameBtn">Rename</button>
+        <button id="exportBtn">Export</button>
+        <button id="deleteBtn" class="danger">Delete</button>`;
+      $("summaryBtn").onclick = showSummary;
+      $("addMsgBtn").onclick = showAddMessage;
+      $("renameBtn").onclick = showRename;
+      $("exportBtn").onclick = showExport;
+      $("deleteBtn").onclick = deleteSession;
+      content.innerHTML = state.messages.map((m) => `
+        <article class="bubble ${esc(m.role)}">
+          <div class="bubble-head">
+            <strong>${esc(m.role)}</strong>
+            <span>${m.timestamp ? new Date(m.timestamp).toLocaleString() : ""}</span>
+            ${m.has_code ? `<span class="pill">code</span>` : ""}
+            ${m.has_command ? `<span class="pill">cmd</span>` : ""}
+            <button data-bookmark="${m.id}">${m.is_bookmarked ? "Saved" : "Save"}</button>
+          </div>
+          <div>${markdown(m.content)}</div>
+        </article>`).join("") || `<div class="empty">No messages yet.</div>`;
+      content.querySelectorAll("[data-bookmark]").forEach((node) => {
+        node.onclick = () => toggleBookmark(Number(node.dataset.bookmark));
+      });
+    }
+
+    async function renderBookmarks() {
+      state.bookmarks = await api("/api/bookmarks");
+      $("side").innerHTML = state.bookmarks.map((b) => `
+        <button class="row" data-bookmark-session="${b.session_ref}">
+          <div class="row-title">${esc(b.session_name)}</div>
+          <div class="meta">${esc(b.note || b.content.slice(0, 120))}</div>
+        </button>`).join("") || `<div class="empty">No bookmarks.</div>`;
+      $("side").querySelectorAll("[data-bookmark-session]").forEach((node) => {
+        node.onclick = async () => {
+          state.tab = "chats";
+          await loadSessions();
+          await selectSession(Number(node.dataset.bookmarkSession));
+          setActiveTab();
+        };
+      });
+    }
+
+    async function renderRepos() {
+      state.repos = await api("/api/repos");
+      $("side").innerHTML = `
+        <div class="split" style="margin-bottom:10px">
+          <button id="indexRepoBtn" class="primary">Index</button>
+          <button id="discoverRepoBtn">Discover</button>
+        </div>
+        ${state.repos.map((r) => `
+          <button class="row" data-repo="${r.id}">
+            <div class="row-title">${esc(r.name || r.path)}</div>
+            <div class="meta">${r.file_count || 0} files</div>
+          </button>`).join("") || `<div class="empty">No indexed repos.</div>`}`;
+      $("indexRepoBtn").onclick = showIndexRepo;
+      $("discoverRepoBtn").onclick = showDiscoverRepos;
+      $("side").querySelectorAll("[data-repo]").forEach((node) => {
+        node.onclick = () => loadRepoFiles(Number(node.dataset.repo));
+      });
+    }
+
+    async function loadRepoFiles(id) {
+      state.selectedRepo = state.repos.find((r) => r.id === id);
+      state.repoFiles = await api(`/api/repos/${id}/files`);
+      $("toolbar").innerHTML = `<div class="title">${esc(state.selectedRepo.name)}</div><button id="deleteRepoBtn" class="danger">Delete Repo</button>`;
+      $("deleteRepoBtn").onclick = async () => {
+        if (!confirm("Delete indexed repo?")) return;
+        await api(`/api/repos/${id}`, { method: "DELETE" });
+        state.selectedRepo = null;
+        await renderRepos();
+        renderMain();
+      };
+      $("content").innerHTML = state.repoFiles.map((f) => `
+        <button class="row" data-file="${f.id}">
+          <div class="row-title">${esc(f.rel_path)}</div>
+          <div class="meta">${esc(f.lang)} - ${f.symbol_count || 0} symbols - ${f.mention_count || 0} mentions</div>
+          <div>${esc(f.summary || "")}</div>
+        </button>`).join("") || `<div class="empty">No files.</div>`;
+      $("content").querySelectorAll("[data-file]").forEach((node) => {
+        node.onclick = () => showRepoFile(Number(node.dataset.file));
+      });
+    }
+
+    async function showRepoFile(fileId) {
+      const data = await api(`/api/repos/${state.selectedRepo.id}/files/${fileId}`);
+      openModal(data.file.rel_path, `
+        <div class="form-grid">
+          <div>${esc(data.file.summary || "")}</div>
+          <div><span class="pill">${esc(data.file.lang)}</span><span class="pill">${data.file.mention_count || 0} mentions</span></div>
+          <h3>Symbols</h3>
+          <pre>${esc(JSON.stringify(data.file.symbols || [], null, 2))}</pre>
+          <h3>Mentions</h3>
+          ${data.mentions.map((m) => `<div class="row"><div class="row-title">${esc(m.session_name || "")}</div><div>${esc(m.excerpt || "")}</div></div>`).join("") || "<div>No mentions.</div>"}
+        </div>`);
+    }
+
+    async function renderMemorySide() {
+      state.projects = await api("/api/projects");
+      $("side").innerHTML = `
+        <button id="distillBtn" class="primary" style="width:100%;margin-bottom:10px">Distill</button>
+        ${state.projects.map((p) => `
+          <button class="row" data-project="${esc(p.key)}">
+            <div class="row-title">${esc(p.name || p.key)}</div>
+            <div class="meta">${p.artifact_count || 0} artifacts</div>
+          </button>`).join("") || `<div class="empty">No project memory yet.</div>`}`;
+      $("distillBtn").onclick = async () => {
+        const result = await api("/api/memory/extract", { method: "POST", body: {} });
+        toast(`Processed ${result.processed} sessions`);
+        await renderMemorySide();
+      };
+      $("side").querySelectorAll("[data-project]").forEach((node) => {
+        node.onclick = () => loadProjectMemory(node.dataset.project);
+      });
+    }
+
+    async function loadProjectMemory(projectKey) {
+      const data = await api(`/api/memory/artifacts?project=${encodeURIComponent(projectKey)}`);
+      state.selectedProject = data.project;
+      state.artifacts = data.artifacts;
+      $("toolbar").innerHTML = `
+        <div class="title">${esc(data.project.name || data.project.key)}</div>
+        <input id="memorySearch" style="max-width:320px" placeholder="Search memory">
+        <button id="memorySearchBtn">Search</button>
+        <button id="projectSummaryBtn">Summary</button>`;
+      $("memorySearchBtn").onclick = searchProjectMemory;
+      $("memorySearch").onkeydown = (event) => { if (event.key === "Enter") searchProjectMemory(); };
+      $("projectSummaryBtn").onclick = regenerateProjectSummary;
+      renderArtifacts(state.artifacts);
+    }
+
+    function renderArtifacts(items) {
+      $("content").innerHTML = items.map((a) => `
+        <article class="bubble">
+          <div class="bubble-head"><strong class="type-${esc(a.type)}">${esc(a.type)}</strong><span>${a.created_at ? new Date(a.created_at).toLocaleDateString() : ""}</span></div>
+          <h3>${esc(a.title || "(untitled)")}</h3>
+          <p>${esc(a.content)}</p>
+          ${(a.files_touched || []).map((f) => `<span class="pill">${esc(f)}</span>`).join("")}
+        </article>`).join("") || `<div class="empty">No artifacts.</div>`;
+    }
+
+    async function searchProjectMemory() {
+      const q = $("memorySearch").value.trim();
+      if (!q) return renderArtifacts(state.artifacts);
+      const result = await api(`/api/memory/search?project=${encodeURIComponent(state.selectedProject.key)}&q=${encodeURIComponent(q)}&k=12`);
+      renderArtifacts(result.artifacts || []);
+    }
+
+    async function regenerateProjectSummary() {
+      const result = await api(`/api/projects/${state.selectedProject.id}/summary`, { method: "POST", body: {} });
+      openModal("Project Summary", `<div>${markdown(result.summary || result.message || "")}</div>`, null);
+    }
+
+    function showNewSession() {
+      openModal("New Session", `
+        <div class="form-grid">
+          <input id="sessionName" placeholder="Name">
+          <input id="sessionTags" placeholder="Tags">
+          <textarea id="sessionNotes" placeholder="Notes"></textarea>
+        </div>`, async () => {
+          const session = await api("/api/sessions", {
+            method: "POST",
+            body: { name: $("sessionName").value, tags: $("sessionTags").value, notes: $("sessionNotes").value },
+          });
+          await loadSessions();
+          await selectSession(session.id);
+        });
+    }
+
+    function showImport() {
+      openModal("Import", `
+        <div class="form-grid">
+          <input id="importName" placeholder="Session name">
+          <input id="importTags" placeholder="Tags">
+          <textarea id="importJson" placeholder='[{"role":"user","content":"hello"}]'></textarea>
+        </div>`, async () => {
+          const result = await api("/api/import", {
+            method: "POST",
+            body: {
+              sessionName: $("importName").value,
+              tags: $("importTags").value,
+              conversation: JSON.parse($("importJson").value),
+            },
+          });
+          await loadSessions();
+          await selectSession(result.session.id);
+        }, "Import");
+    }
+
+    function showAddMessage() {
+      openModal("Add Message", `
+        <div class="form-grid">
+          <select id="messageRole"><option>user</option><option>assistant</option><option>system</option></select>
+          <textarea id="messageContent"></textarea>
+        </div>`, async () => {
+          await api(`/api/sessions/${state.selectedSession.id}/messages`, {
+            method: "POST",
+            body: { messages: [{ role: $("messageRole").value, content: $("messageContent").value }] },
+          });
+          await selectSession(state.selectedSession.id);
+        });
+    }
+
+    function showRename() {
+      openModal("Session", `
+        <div class="form-grid">
+          <input id="editName" value="${esc(state.selectedSession.name || "")}">
+          <input id="editTags" value="${esc(state.selectedSession.tags || "")}">
+          <textarea id="editNotes">${esc(state.selectedSession.notes || "")}</textarea>
+        </div>`, async () => {
+          await api(`/api/sessions/${state.selectedSession.id}`, {
+            method: "PUT",
+            body: { name: $("editName").value, tags: $("editTags").value, notes: $("editNotes").value },
+          });
+          await loadSessions();
+          await selectSession(state.selectedSession.id);
+        });
+    }
+
+    async function showSummary() {
+      let stored = await api(`/api/sessions/${state.selectedSession.id}/summary`);
+      openModal("Summary", `<div id="summaryBody">${stored.summary ? markdown(stored.summary) : "No summary yet."}</div>`, async () => {
+        const result = await api(`/api/sessions/${state.selectedSession.id}/summary`, {
+          method: "POST",
+          body: { force: true },
+        });
+        $("summaryBody").innerHTML = markdown(result.summary);
+        toast("Summary updated");
+        return false;
+      }, "Regenerate");
+    }
+
+    async function showExport() {
+      const data = await api(`/api/sessions/${state.selectedSession.id}/export`);
+      openModal("Export", `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`, null);
+    }
+
+    async function deleteSession() {
+      if (!confirm("Delete this session?")) return;
+      await api(`/api/sessions/${state.selectedSession.id}`, { method: "DELETE" });
+      state.selectedSession = null;
+      state.messages = [];
+      await loadSessions();
+      renderMain();
+    }
+
+    async function toggleBookmark(messageId) {
+      const message = state.messages.find((m) => m.id === messageId);
+      if (!message) return;
+      if (message.is_bookmarked) {
+        await api(`/api/bookmarks/${message.bookmark_id}`, { method: "DELETE" });
+      } else {
+        openModal("Bookmark", `<textarea id="bookmarkNote" placeholder="Note"></textarea>`, async () => {
+          await api("/api/bookmarks", {
+            method: "POST",
+            body: { messageId, sessionId: state.selectedSession.id, note: $("bookmarkNote").value },
+          });
+          await selectSession(state.selectedSession.id);
+        });
+        return;
+      }
+      await selectSession(state.selectedSession.id);
+    }
+
+    function showIndexRepo() {
+      openModal("Index Repo", `<input id="repoPath" placeholder="Absolute path">`, async () => {
+        const result = await api("/api/repos/index", { method: "POST", body: { path: $("repoPath").value } });
+        toast(`Indexed ${result.fileCount} files`);
+        await renderRepos();
+      }, "Index");
+    }
+
+    function showDiscoverRepos() {
+      openModal("Discover Repos", `<input id="discoverBase" placeholder="Base path">`, async () => {
+        const qs = $("discoverBase").value ? `?base=${encodeURIComponent($("discoverBase").value)}` : "";
+        const data = await api(`/api/repos/discover${qs}`);
+        $("modal").close();
+        openModal("Discovered Repos", data.repos.map((r) => `
+          <button class="row" data-discovered="${esc(r.path)}">
+            <div class="row-title">${esc(r.name)}</div><div class="meta">${esc(r.path)}</div>
+          </button>`).join("") || "No repos found.", null);
+        document.querySelectorAll("[data-discovered]").forEach((node) => {
+          node.onclick = async () => {
+            await api("/api/repos/index", { method: "POST", body: { path: node.dataset.discovered } });
+            $("modal").close();
+            await renderRepos();
+          };
+        });
+      }, "Discover");
+    }
+
+    async function performGlobalSearch() {
+      const q = $("globalSearch").value.trim();
+      if (!q) return;
+      const rows = await api(`/api/search?q=${encodeURIComponent(q)}${state.selectedSession ? `&sessionId=${state.selectedSession.id}` : ""}`);
+      openModal("Search", rows.map((r) => `
+        <button class="row" data-search-session="${r.session_ref}">
+          <div class="row-title">${esc(r.session_name)}</div>
+          <div>${esc(r.content.slice(0, 240))}</div>
+        </button>`).join("") || "No results.", null);
+      document.querySelectorAll("[data-search-session]").forEach((node) => {
+        node.onclick = async () => {
+          $("modal").close();
+          await selectSession(Number(node.dataset.searchSession));
+        };
+      });
+    }
+
+    function setActiveTab() {
+      document.querySelectorAll(".tabs button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.tab === state.tab);
+      });
+    }
+
+    document.querySelectorAll(".tabs button").forEach((button) => {
+      button.onclick = async () => {
+        state.tab = button.dataset.tab;
+        setActiveTab();
+        renderSide();
+      };
+    });
+
+    $("newBtn").onclick = showNewSession;
+    $("importBtn").onclick = showImport;
+    $("syncBtn").onclick = async () => {
+      const result = await api("/api/sync", { method: "POST", body: {} });
+      toast(result.skipped ? "Sync already running" : "Sync complete");
+      await loadSessions();
+    };
+    $("globalSearch").onkeydown = (event) => {
+      if (event.key === "Enter") performGlobalSearch();
+    };
+    window.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        $("globalSearch").focus();
+      }
+    });
+
+    loadSessions().then(renderMain).catch((err) => toast(err.message));
+  </script>
+</body>
+</html>
