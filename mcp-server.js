@@ -2,6 +2,7 @@ require("dotenv").config({ path: __dirname + "/.env" });
 
 const db = require("./db");
 const retrieve = require("./retrieve");
+const { normalizeRecallRequest } = require("./recall_request");
 
 function textResult(value) {
   return {
@@ -14,6 +15,18 @@ function textResult(value) {
   };
 }
 
+async function handleRecallTaskContextInput(input, recallTaskContext = retrieve.recallTaskContext) {
+  const normalized = normalizeRecallRequest({
+    project: input.project,
+    query: input.task,
+    files: input.files || [],
+    error: input.error || "",
+    maxTokens: input.maxTokens || 700,
+    maxArtifacts: input.maxArtifacts || 5,
+  }, { taskField: "task" });
+  return recallTaskContext(normalized);
+}
+
 async function main() {
   const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
   const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
@@ -22,9 +35,11 @@ async function main() {
   const server = new McpServer({ name: "project-memory", version: "1.0.0" });
   const artifactType = z.enum(["decision", "fact", "solved_problem", "convention", "todo", "gotcha"]);
 
-  function register(name, schema, handler) {
+  function register(name, schema, handler, description = "") {
     if (typeof server.registerTool === "function") {
-      server.registerTool(name, { inputSchema: schema }, handler);
+      server.registerTool(name, { description, inputSchema: schema }, handler);
+    } else if (description) {
+      server.tool(name, description, schema, handler);
     } else {
       server.tool(name, schema, handler);
     }
@@ -37,6 +52,20 @@ async function main() {
       const summary = await retrieve.getProjectSummary(project);
       return textResult(summary || { found: false, message: "Project not found" });
     }
+  );
+
+  register(
+    "recall_task_context",
+    {
+      project: z.string(),
+      task: z.string(),
+      files: z.array(z.string()).optional(),
+      error: z.string().optional(),
+      maxTokens: z.number().min(100).max(2000).optional(),
+      maxArtifacts: z.number().min(1).max(12).optional(),
+    },
+    async (input) => textResult(await handleRecallTaskContextInput(input)),
+    "Retrieve relevant prior decisions, solved problems, conventions and gotchas before investigating a non-trivial coding task. Use this when starting work on an existing project, revisiting behaviour, debugging an error, changing architecture or modifying files that may have relevant history."
   );
 
   register(
@@ -93,4 +122,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main };
+module.exports = { main, handleRecallTaskContextInput, textResult };

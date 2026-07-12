@@ -683,9 +683,16 @@
     $("newBtn").onclick = showNewSession;
     $("importBtn").onclick = showImport;
     $("syncBtn").onclick = async () => {
-      const result = await api("/api/sync", { method: "POST", body: {} });
-      toast(result.skipped ? "Sync already running" : "Sync complete");
-      await loadSessions();
+      $("syncBtn").disabled = true;
+      try {
+        const result = await api("/api/sync", { method: "POST", body: {} });
+        toast(result.skipped ? "Sync already running" : "Sync complete");
+        await loadSessions();
+      } catch (err) {
+        toast(`Sync failed: ${err.message}`);
+      } finally {
+        $("syncBtn").disabled = false;
+      }
     };
     $("globalSearch").onkeydown = (event) => {
       if (event.key === "Enter") performGlobalSearch();

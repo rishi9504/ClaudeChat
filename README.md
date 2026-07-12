@@ -8,7 +8,7 @@ The app has three subsystems:
 
 - Ingest and compact: `capture.py` records Claude Code transcripts during PreCompact, while `bulk_import.py` re-scans `~/.claude/projects/**/*.jsonl`.
 - Project memory store: `extract.js` distills durable project knowledge into artifacts, embeds them with OpenAI embeddings when available, and stores them in Postgres with pgvector.
-- Retrieve and inject: REST routes, `viewer.html`, `session_start_hook.py`, and `mcp-server.js` retrieve memory for browsing, search, hooks, and MCP tools.
+- Retrieve and inject: REST routes, `viewer.html`, `session_start_hook.py`, and `mcp-server.js` retrieve memory for browsing, task-specific recall, search, hooks, and MCP tools.
 
 ## Files
 
@@ -20,6 +20,7 @@ The app has three subsystems:
 - `session_start_hook.py`: Claude Code SessionStart hook.
 - `bulk_import.py`: batch importer for Claude JSONL transcripts.
 - `extract.js`, `llm.js`, `embeddings.js`, `projects.js`, `retrieve.js`: project memory pipeline.
+- `recall_scoring.js`, `recall_request.js`: deterministic task recall scoring and request normalization.
 - `session_summary.js`: cached per-conversation summaries.
 - `manifest.js`, `summarize.js`, `enrich.js`: repo indexing and file mention enrichment.
 - `backup.js`, `restore.js`: JSON snapshots of sessions, messages, and bookmarks only.
@@ -112,6 +113,83 @@ The app has three subsystems:
      }
    }
    ```
+
+## Extraction Freshness
+
+Imported transcripts and PreCompact captures compute `sessions.source_hash` from normalized ordered messages and store stable message `seq` values. Extraction no longer depends only on `extraction_log`; a session is skipped only when:
+
+```text
+source_hash is present and source_hash == last_extracted_hash
+```
+
+When extraction runs for a changed or forced session, artifacts from that same `session_ref` are deleted and recreated from the current transcript. Artifacts from other sessions are left alone. Successful extraction updates `last_extracted_hash` and `last_extracted_at`.
+
+## Task Recall API
+
+Use `POST /api/memory/recall` before investigating a non-trivial coding task:
+
+```json
+{
+  "project": "C:\\GithubRepos\\ClaudeChat",
+  "query": "The session-start hook is returning stale memory",
+  "files": ["session_start_hook.py", "retrieve.js"],
+  "error": "",
+  "branch": "main",
+  "commit": "",
+  "maxTokens": 700,
+  "maxArtifacts": 5
+}
+```
+
+The response returns a compact markdown context pack and selected memories when relevance is strong enough:
+
+```json
+{
+  "memoryUsed": true,
+  "context": "## Relevant project memory\n...",
+  "estimatedTokens": 318,
+  "memories": []
+}
+```
+
+Recall combines vector candidates when OpenAI embeddings are configured with keyword candidates, then applies deterministic boosts for lexical matches, active-file overlap, memory type, and recency. Todos are excluded unless the task explicitly asks about pending work.
+
+## MCP Tools
+
+The MCP server keeps the existing tools:
+
+- `get_project_summary`
+- `search_memory`
+- `get_project_context`
+- `list_projects`
+
+It also exposes `recall_task_context`, which accepts `project`, `task`, optional `files`, optional `error`, and `maxTokens`. Use it before changing existing behavior, debugging errors, revisiting architecture, or editing files that may have historical decisions.
+
+## SessionStart Hook
+
+`session_start_hook.py` no longer injects a broad artifact list. It injects only a short project-memory note plus the project summary when available, and tells the agent to call `recall_task_context` or `search_memory` once the actual task is known.
+
+## Recall Telemetry
+
+Every REST or MCP task recall writes a row to `memory_recall_log` with the project id, query, active files, error text, selected artifact ids, memory-used flag, estimated tokens, mode, and timestamp. The log intentionally does not store API keys, environment variables, or credentials.
+
+## Example Agent Flow
+
+1. SessionStart injects a short memory-service note.
+2. The user gives a coding task.
+3. The agent calls `recall_task_context` with the task text, active files, and error text.
+4. The agent reads the compact context pack and proceeds with implementation.
+5. The agent can call `search_memory` for deeper historical investigation when the compact pack is insufficient.
+
+## Tests
+
+Run:
+
+```powershell
+npm test
+```
+
+The tests use built-in Node and Python test runners and do not require OpenAI, Anthropic, or a live Postgres database.
 
 ## Recovery Note
 

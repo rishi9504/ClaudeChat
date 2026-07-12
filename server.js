@@ -11,6 +11,8 @@ const enrich = require("./enrich");
 const retrieve = require("./retrieve");
 const extract = require("./extract");
 const sessionSummary = require("./session_summary");
+const { transcriptHash } = require("./transcript_hash");
+const { executeRecallRequest } = require("./recall_request");
 
 const app = express();
 const PORT = 3737;
@@ -61,11 +63,15 @@ function runProcess(command, args) {
   });
 }
 
+function pythonCommand() {
+  return process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+}
+
 async function runSyncJob() {
   if (syncRunning) return { skipped: true };
   syncRunning = true;
   try {
-    await runProcess("python3", ["bulk_import.py"]);
+    await runProcess(pythonCommand(), ["bulk_import.py"]);
     await runProcess("node", ["backup.js"]);
     return { ok: true };
   } finally {
@@ -73,8 +79,9 @@ async function runSyncJob() {
   }
 }
 
-const syncIntervalMinutes = parseInt(process.env.SYNC_INTERVAL_MINUTES || "60", 10);
-if (syncIntervalMinutes > 0) {
+function scheduleAutoSync() {
+  const syncIntervalMinutes = parseInt(process.env.SYNC_INTERVAL_MINUTES || "60", 10);
+  if (syncIntervalMinutes <= 0) return;
   setTimeout(() => {
     runSyncJob().catch((err) => console.error("Auto-sync failed:", err.message));
   }, 5000);
@@ -144,7 +151,7 @@ app.get("/api/sessions/:id/messages", asyncRoute(async (req, res) => {
        LIMIT 1
      ) b ON true
      WHERE m.session_ref = $1
-     ORDER BY m.inserted_at ASC, m.id ASC`,
+     ORDER BY m.seq ASC NULLS LAST, m.inserted_at ASC, m.id ASC`,
     [req.params.id]
   );
   res.json(rows.rows);
@@ -155,25 +162,37 @@ app.post("/api/sessions/:id/messages", asyncRoute(async (req, res) => {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    const seqRow = await client.query(
+      "SELECT COALESCE(MAX(seq), -1)::int AS max_seq FROM messages WHERE session_ref = $1",
+      [req.params.id]
+    );
+    let seq = seqRow.rows[0].max_seq + 1;
     for (const message of messages) {
       await client.query(
-        `INSERT INTO messages(session_ref, role, content, has_code, has_command)
-         VALUES($1,$2,$3,$4,$5)`,
+        `INSERT INTO messages(session_ref, seq, role, content, has_code, has_command)
+         VALUES($1,$2,$3,$4,$5,$6)`,
         [
           req.params.id,
+          seq,
           message.role || "user",
           message.content || "",
           detectHasCode(message.content),
           detectHasCommand(message.content),
         ]
       );
+      seq += 1;
     }
+    const ordered = await client.query(
+      "SELECT seq, role, content, captured_at FROM messages WHERE session_ref = $1 ORDER BY seq ASC NULLS LAST, inserted_at ASC, id ASC",
+      [req.params.id]
+    );
     await client.query(
       `UPDATE sessions
        SET updated_at = NOW(),
+           source_hash = $2,
            message_count = (SELECT COUNT(*) FROM messages WHERE session_ref = $1)
        WHERE id = $1`,
-      [req.params.id]
+      [req.params.id, transcriptHash(ordered.rows)]
     );
     await client.query("COMMIT");
     res.json({ success: true, count: messages.length });
@@ -208,20 +227,29 @@ app.post("/api/import", asyncRoute(async (req, res) => {
   const { sessionName, conversation, tags = "" } = req.body || {};
   if (!String(sessionName || "").trim()) return res.status(400).json({ error: "sessionName is required" });
   if (!Array.isArray(conversation)) return res.status(400).json({ error: "conversation must be an array" });
+  const normalized = conversation.map((message, seq) => ({
+    seq,
+    role: message.role || "user",
+    content: message.content || "",
+    captured_at: null,
+  }));
+  const sourceHash = transcriptHash(normalized);
   const client = await db.connect();
   try {
     await client.query("BEGIN");
     const session = await client.query(
-      "INSERT INTO sessions(name, tags, message_count) VALUES($1,$2,$3) RETURNING *",
-      [sessionName.trim(), tags, conversation.length]
+      "INSERT INTO sessions(name, tags, message_count, source_hash) VALUES($1,$2,$3,$4) RETURNING *",
+      [sessionName.trim(), tags, conversation.length, sourceHash]
     );
-    for (const message of conversation) {
+    for (let seq = 0; seq < conversation.length; seq += 1) {
+      const message = conversation[seq];
       const content = message.content || "";
       await client.query(
-        `INSERT INTO messages(session_ref, role, content, has_code, has_command)
-         VALUES($1,$2,$3,$4,$5)`,
+        `INSERT INTO messages(session_ref, seq, role, content, has_code, has_command)
+         VALUES($1,$2,$3,$4,$5,$6)`,
         [
           session.rows[0].id,
+          seq,
           message.role || "user",
           content,
           detectHasCode(content),
@@ -289,7 +317,7 @@ app.get("/api/sessions/:id/export", asyncRoute(async (req, res) => {
   const session = await db.query("SELECT * FROM sessions WHERE id = $1", [req.params.id]);
   if (!session.rows.length) return res.status(404).json({ error: "Session not found" });
   const messages = await db.query(
-    "SELECT * FROM messages WHERE session_ref = $1 ORDER BY inserted_at ASC, id ASC",
+    "SELECT * FROM messages WHERE session_ref = $1 ORDER BY seq ASC NULLS LAST, inserted_at ASC, id ASC",
     [req.params.id]
   );
   res.json({ session: session.rows[0], messages: messages.rows });
@@ -423,6 +451,15 @@ app.get("/api/memory/search", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+app.post("/api/memory/recall", asyncRoute(async (req, res) => {
+  try {
+    const result = await executeRecallRequest(req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ error: err.message });
+  }
+}));
+
 app.get("/api/memory/artifacts", asyncRoute(async (req, res) => {
   const projectKey = String(req.query.project || "").trim();
   if (!projectKey) return res.status(400).json({ error: "project is required" });
@@ -493,6 +530,20 @@ app.post("/api/sync", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
-app.listen(PORT, () => {
-  console.log(`claude-chat-history listening on http://localhost:${PORT}`);
-});
+function startServer(port = PORT) {
+  scheduleAutoSync();
+  return app.listen(port, () => {
+    console.log(`claude-chat-history listening on http://localhost:${port}`);
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  startServer,
+  runSyncJob,
+  pythonCommand,
+};

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 import sys
@@ -81,6 +82,7 @@ def parse_transcript(path):
                 continue
             messages.append(
                 {
+                    "seq": len(messages),
                     "role": role,
                     "content": content,
                     "captured_at": row.get("timestamp"),
@@ -91,36 +93,59 @@ def parse_transcript(path):
     return messages
 
 
+def transcript_hash(messages):
+    normalized = [
+        {
+            "seq": index,
+            "role": message.get("role") or "",
+            "content": message.get("content") or "",
+            "captured_at": message.get("captured_at") or "",
+        }
+        for index, message in enumerate(messages)
+    ]
+    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def save_session(payload, messages):
     session_id = payload.get("session_id")
     cwd = payload.get("cwd") or ""
     name = f"{Path(cwd).name or 'unknown'} - {datetime.now():%b %d %H:%M}"
+    source_hash = transcript_hash(messages)
     conn = db_connect()
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO sessions(session_id, name, cwd, message_count, updated_at)
-                    VALUES(%s,%s,%s,%s,NOW())
+                    INSERT INTO sessions(session_id, name, cwd, message_count, source_hash, updated_at)
+                    VALUES(%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT(session_id) DO UPDATE SET
                       updated_at = NOW(),
                       name = EXCLUDED.name,
+                      cwd = EXCLUDED.cwd,
+                      source_hash = EXCLUDED.source_hash,
                       message_count = EXCLUDED.message_count
                     RETURNING id
                     """,
-                    (session_id, name, cwd, len(messages)),
+                    (session_id, name, cwd, len(messages), source_hash),
                 )
                 session_ref = cur.fetchone()[0]
-                cur.execute("DELETE FROM messages WHERE session_ref = %s", (session_ref,))
-                for message in messages:
+                for seq, message in enumerate(messages):
                     cur.execute(
                         """
-                        INSERT INTO messages(session_ref, role, content, has_code, has_command, captured_at)
-                        VALUES(%s,%s,%s,%s,%s,%s)
+                        INSERT INTO messages(session_ref, seq, role, content, has_code, has_command, captured_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT(session_ref, seq) DO UPDATE SET
+                          role = EXCLUDED.role,
+                          content = EXCLUDED.content,
+                          has_code = EXCLUDED.has_code,
+                          has_command = EXCLUDED.has_command,
+                          captured_at = EXCLUDED.captured_at
                         """,
                         (
                             session_ref,
+                            seq,
                             message["role"],
                             message["content"],
                             message["has_code"],
@@ -128,6 +153,10 @@ def save_session(payload, messages):
                             message["captured_at"],
                         ),
                     )
+                cur.execute(
+                    "DELETE FROM messages WHERE session_ref = %s AND seq >= %s",
+                    (session_ref, len(messages)),
+                )
     finally:
         conn.close()
 

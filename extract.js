@@ -5,6 +5,7 @@ const db = require("./db");
 const llm = require("./llm");
 const embeddings = require("./embeddings");
 const projects = require("./projects");
+const { transcriptHash } = require("./transcript_hash");
 
 const TYPES = new Set(["decision", "fact", "solved_problem", "convention", "todo", "gotcha"]);
 const CHUNK_CHARS = 14000;
@@ -20,6 +21,16 @@ const SYSTEM_PROMPT = [
 
 function sha256(text) {
   return crypto.createHash("sha256").update(text).digest("hex");
+}
+
+function needsExtraction(session, force = false) {
+  if (force) return true;
+  if (session && session.source_hash && session.source_hash === session.last_extracted_hash) return false;
+  return true;
+}
+
+async function deleteSessionArtifacts(client, sessionRef) {
+  return client.query("DELETE FROM artifacts WHERE session_ref = $1", [sessionRef]);
 }
 
 function chunkTranscript(messages) {
@@ -69,23 +80,30 @@ function cleanArtifact(raw) {
 
 async function extractFromSession(session, { force = false } = {}) {
   const sessionRef = session.id;
-  if (!force) {
-    const existing = await db.query("SELECT id FROM extraction_log WHERE session_ref = $1", [sessionRef]);
-    if (existing.rows.length) return { sessionId: sessionRef, skipped: true, inserted: 0, projectId: null };
+  if (!needsExtraction(session, force)) {
+    return { sessionId: sessionRef, skipped: true, inserted: 0, projectId: null };
   }
 
   const project = await projects.getOrCreateProject(session.cwd);
   if (!project) return { sessionId: sessionRef, skipped: true, inserted: 0, projectId: null };
 
   const messages = await db.query(
-    "SELECT role, content FROM messages WHERE session_ref = $1 ORDER BY inserted_at ASC, id ASC",
+    "SELECT seq, role, content, captured_at FROM messages WHERE session_ref = $1 ORDER BY seq ASC NULLS LAST, inserted_at ASC, id ASC",
     [sessionRef]
   );
   if (!messages.rows.length) return { sessionId: sessionRef, skipped: true, inserted: 0, projectId: project.id };
+  if (!session.source_hash) {
+    session.source_hash = transcriptHash(messages.rows);
+    await db.query(
+      "UPDATE sessions SET source_hash = $2 WHERE id = $1 AND source_hash IS NULL",
+      [sessionRef, session.source_hash]
+    );
+  }
 
   const chunks = chunkTranscript(messages.rows);
   const artifacts = [];
   let model = process.env.ANTHROPIC_MODEL || process.env.OPENAI_MODEL || "llm";
+  let chunkFailures = 0;
 
   for (const chunk of chunks) {
     try {
@@ -102,8 +120,12 @@ async function extractFromSession(session, { force = false } = {}) {
         if (artifact) artifacts.push(artifact);
       }
     } catch (err) {
+      chunkFailures += 1;
       console.error(`Extraction chunk failed for session ${sessionRef}:`, err.message);
     }
+  }
+  if (chunks.length && chunkFailures === chunks.length) {
+    throw new Error(`All extraction chunks failed for session ${sessionRef}`);
   }
 
   const byHash = new Map();
@@ -127,6 +149,7 @@ async function extractFromSession(session, { force = false } = {}) {
   let inserted = 0;
   try {
     await client.query("BEGIN");
+    await deleteSessionArtifacts(client, sessionRef);
     for (let i = 0; i < deduped.length; i += 1) {
       const artifact = deduped[i];
       const vector = vectors && vectors[i] ? embeddings.toVectorLiteral(vectors[i]) : null;
@@ -157,6 +180,10 @@ async function extractFromSession(session, { force = false } = {}) {
          model = EXCLUDED.model,
          extracted_at = NOW()`,
       [sessionRef, project.id, inserted, model]
+    );
+    await client.query(
+      "UPDATE sessions SET last_extracted_hash = source_hash, last_extracted_at = NOW() WHERE id = $1",
+      [sessionRef]
     );
     await client.query("COMMIT");
   } catch (err) {
@@ -222,8 +249,7 @@ async function extractAll({ force = false, sessionId = null } = {}) {
     rows = await db.query(
       `SELECT s.*
        FROM sessions s
-       LEFT JOIN extraction_log e ON e.session_ref = s.id
-       WHERE e.id IS NULL
+       WHERE s.source_hash IS NULL OR s.last_extracted_hash IS DISTINCT FROM s.source_hash
        ORDER BY s.updated_at DESC`
     );
   }
@@ -283,4 +309,6 @@ module.exports = {
   extractAll,
   extractFromSession,
   regenerateProjectSummary,
+  needsExtraction,
+  deleteSessionArtifacts,
 };

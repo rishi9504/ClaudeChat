@@ -10,7 +10,8 @@
     "restore": "node restore.js",
     "manifest": "node manifest.js",
     "extract": "node extract.js",
-    "mcp": "node mcp-server.js"
+    "mcp": "node mcp-server.js",
+    "test": "node tests/run-node-tests.js && python -m unittest discover -s tests -p \"*_test.py\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -12,8 +12,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   message_count INTEGER DEFAULT 0,
   summary TEXT DEFAULT '',
   summary_updated_at TIMESTAMPTZ,
-  source_hash TEXT
+  source_hash TEXT,
+  last_extracted_hash TEXT,
+  last_extracted_at TIMESTAMPTZ
 );
+
+ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS source_hash TEXT;
+ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS last_extracted_hash TEXT;
+ALTER TABLE IF EXISTS sessions ADD COLUMN IF NOT EXISTS last_extracted_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS messages (
   id SERIAL PRIMARY KEY,
@@ -120,4 +126,17 @@ CREATE TABLE IF NOT EXISTS extraction_log (
   model TEXT DEFAULT '',
   extracted_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(session_ref)
+);
+
+CREATE TABLE IF NOT EXISTS memory_recall_log (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  query TEXT NOT NULL DEFAULT '',
+  files JSONB NOT NULL DEFAULT '[]',
+  error_text TEXT NOT NULL DEFAULT '',
+  artifact_ids JSONB NOT NULL DEFAULT '[]',
+  memory_used BOOLEAN NOT NULL DEFAULT FALSE,
+  estimated_tokens INTEGER NOT NULL DEFAULT 0,
+  mode TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

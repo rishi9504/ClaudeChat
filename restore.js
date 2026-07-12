@@ -11,8 +11,8 @@ async function restoreFile(client, filePath) {
 
   if (session.session_id) {
     const row = await client.query(
-      `INSERT INTO sessions(session_id, name, cwd, tags, notes, created_at, updated_at, message_count, summary, summary_updated_at, source_hash)
-       VALUES($1,$2,$3,$4,$5,COALESCE($6,NOW()),COALESCE($7,NOW()),$8,$9,$10,$11)
+      `INSERT INTO sessions(session_id, name, cwd, tags, notes, created_at, updated_at, message_count, summary, summary_updated_at, source_hash, last_extracted_hash, last_extracted_at)
+       VALUES($1,$2,$3,$4,$5,COALESCE($6,NOW()),COALESCE($7,NOW()),$8,$9,$10,$11,$12,$13)
        ON CONFLICT(session_id) DO UPDATE SET
          name = EXCLUDED.name,
          cwd = EXCLUDED.cwd,
@@ -22,7 +22,9 @@ async function restoreFile(client, filePath) {
          message_count = EXCLUDED.message_count,
          summary = EXCLUDED.summary,
          summary_updated_at = EXCLUDED.summary_updated_at,
-         source_hash = EXCLUDED.source_hash
+         source_hash = EXCLUDED.source_hash,
+         last_extracted_hash = EXCLUDED.last_extracted_hash,
+         last_extracted_at = EXCLUDED.last_extracted_at
        RETURNING id`,
       [
         session.session_id,
@@ -36,13 +38,15 @@ async function restoreFile(client, filePath) {
         session.summary || "",
         session.summary_updated_at || null,
         session.source_hash || null,
+        session.last_extracted_hash || null,
+        session.last_extracted_at || null,
       ]
     );
     sessionRef = row.rows[0].id;
   } else {
     const row = await client.query(
-      `INSERT INTO sessions(name, cwd, tags, notes, created_at, updated_at, message_count, summary, summary_updated_at, source_hash)
-       VALUES($1,$2,$3,$4,COALESCE($5,NOW()),COALESCE($6,NOW()),$7,$8,$9,$10)
+      `INSERT INTO sessions(name, cwd, tags, notes, created_at, updated_at, message_count, summary, summary_updated_at, source_hash, last_extracted_hash, last_extracted_at)
+       VALUES($1,$2,$3,$4,COALESCE($5,NOW()),COALESCE($6,NOW()),$7,$8,$9,$10,$11,$12)
        RETURNING id`,
       [
         session.name || "",
@@ -55,6 +59,8 @@ async function restoreFile(client, filePath) {
         session.summary || "",
         session.summary_updated_at || null,
         session.source_hash || null,
+        session.last_extracted_hash || null,
+        session.last_extracted_at || null,
       ]
     );
     sessionRef = row.rows[0].id;
